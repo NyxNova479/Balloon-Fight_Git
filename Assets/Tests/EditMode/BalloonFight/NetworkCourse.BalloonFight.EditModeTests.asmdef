@@ -1,0 +1,23 @@
+{
+  "name": "NetworkCourse.BalloonFight.EditModeTests",
+  "rootNamespace": "NetworkCourse.BalloonFight.Tests",
+  "references": [
+    "NetworkCourse.BalloonFight.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}
