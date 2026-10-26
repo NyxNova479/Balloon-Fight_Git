@@ -47,6 +47,7 @@ namespace NetworkCourse.BalloonFight.Engine
         private RenderSnapshot _renderSnapshot;
         private double _accumulatorSeconds;
         private double _tickDeltaSeconds;
+        private bool _hasWarnedAboutTickDebt;
         private bool _clockStarted;
 
         public OfflineRunnerStatus Status => _status;
@@ -126,19 +127,67 @@ namespace NetworkCourse.BalloonFight.Engine
 
         private void FrameUpdate()
         {
-            throw new NotImplementedException();
+            
+            _inputCapture.FrameUpdate();
+            if (!_clockStarted)
+            {
+                _clockStarted = true;
+                return;
+            }
 
+            _accumulatorSeconds += Time.unscaledDeltaTime;
+
+            double maximumDebtSeconds = _tickDeltaSeconds * MaxTickDebt;
+            if (_accumulatorSeconds > maximumDebtSeconds
+                && !_hasWarnedAboutTickDebt)
+            {
+                _hasWarnedAboutTickDebt = true;
+
+            }
         }
 
         private bool SimulationStep()
         {
-            throw new NotImplementedException();
+
+            uint tick = _simulation.NextTick;
+            FighterInput fighter0Input = _inputCapture.CreateInput(tick);
+            FighterInput fighter1Input = FighterInput.Neutral(tick);
+
+            SimulationResult result = _simulation.Step(
+                in fighter0Input,
+                in fighter1Input);
+            if (!result.Succeeded)
+            {
+                StopWithError(
+                    OfflineRunnerStatus.SimulationError,
+                    "Balloon Fight simulation step failed.");
+                return false;
+            }
+
+            SimulationState state = result.State;
+            _renderSnapshot = RenderSnapshot.FromSimulation(in state);
+
+            return true;
 
         }
 
         private void RenderStep()
         {
-            throw new NotImplementedException();
+            if (!_fighter0View.RenderStep(in _renderSnapshot))
+            {
+                StopWithError(
+                    OfflineRunnerStatus.ConfigurationError,
+                    "Fighter0 view rejected a render snapshot.");
+                return;
+            }
+
+            if (_fighter1View != null
+                && !_fighter1View.RenderStep(in _renderSnapshot))
+            {
+                StopWithError(
+                    OfflineRunnerStatus.ConfigurationError,
+                    "Fighter1 view rejected a render snapshot.");
+            }
         }
 
         private bool ValidateReferences()

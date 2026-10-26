@@ -3,6 +3,14 @@ using System.Drawing;
 namespace NetworkCourse.BalloonFight.Simulation
 {
 
+    public enum FighterPhase
+    {
+        Flying = 0,
+        Falling = 1,
+        Eliminated = 2
+
+    }
+
     public struct FighterState
     {
         public bool IsActive;
@@ -12,7 +20,7 @@ namespace NetworkCourse.BalloonFight.Simulation
 
         public float FlapCooldownRemaining;
 
-        public static FighterState CreateActive(in SimVector2 position)
+        public static FighterState CreateAtSpawn(in SimVector2 position)
         {
             return new FighterState
             {
@@ -24,15 +32,11 @@ namespace NetworkCourse.BalloonFight.Simulation
             };
         }
 
-        public static FighterState CreateInactive()
+
+
+        public static FighterState CreateActive(in SimVector2 position)
         {
-            return new FighterState
-            {
-                IsActive = false,
-                Position = new SimVector2(0f, 0f),
-                Velocity = new SimVector2(0f, 0f),
-                FlapCooldownRemaining = 0f
-            };
+            return CreateAtSpawn(in position);
         }
     }
 }
