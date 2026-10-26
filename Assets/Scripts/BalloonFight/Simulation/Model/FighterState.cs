@@ -13,6 +13,8 @@ namespace NetworkCourse.BalloonFight.Simulation
 
     public struct FighterState
     {
+        public FighterPhase Phase;
+
         public bool IsActive;
 
         public SimVector2 Position;

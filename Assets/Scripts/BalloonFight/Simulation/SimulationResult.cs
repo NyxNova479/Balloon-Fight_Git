@@ -15,7 +15,8 @@ namespace NetworkCourse.BalloonFight.Simulation
         public readonly SimulationStatus Status;
         public readonly bool HasProcessedTick;
         public readonly uint ProcessedTick;
-        public readonly SimulationState State;
+        public readonly ushort ProcessedSlotOrder;
+        public readonly SimulationSnapshot Snapshot;
 
         public bool Succeeded => Status == SimulationStatus.Completed;
 
@@ -23,32 +24,36 @@ namespace NetworkCourse.BalloonFight.Simulation
             SimulationStatus status,
             bool hasProcessedTick,
             uint processedTick,
-            in SimulationState state)
+            ushort processedSlotOrder,
+            in SimulationSnapshot snapshot)
         {
 
             Status = status;
             HasProcessedTick = hasProcessedTick;
             ProcessedTick = processedTick;
-            State = state;
+            ProcessedSlotOrder = processedSlotOrder;
+            Snapshot = snapshot;
 
         }
 
         public static SimulationResult Complete(
             uint processedTick,
-            in SimulationState state)
+            ushort processedSlotOrder,
+            in SimulationSnapshot snapshot)
         {
             return new SimulationResult(
                 SimulationStatus.Completed,
                 true,
                 processedTick,
-                in state);
+                processedSlotOrder,
+                in snapshot);
         }
 
         public static SimulationResult Fail(
-            SimulationStatus status,
-            in SimulationState state)
+            SimulationStatus status)
         {
-            return new SimulationResult(status, false, 0u, in state);
+            SimulationSnapshot empty = default;
+            return new SimulationResult(status, false, 0u, 0, in empty);
         }
     }
 

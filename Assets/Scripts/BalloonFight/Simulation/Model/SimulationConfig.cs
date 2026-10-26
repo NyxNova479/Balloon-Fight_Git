@@ -20,6 +20,9 @@ namespace NetworkCourse.BalloonFight.Simulation
         public readonly float YMin;
         public readonly float YMax;
 
+        public readonly SimVector2 Fighter0Spawn;
+        public readonly SimVector2 Fighter1Spawn;
+
         public SimulationConfig(
             float tickDeltaTime,
             float gravityAcceleration,
@@ -34,7 +37,9 @@ namespace NetworkCourse.BalloonFight.Simulation
             float xMin,
             float xMax,
             float yMin,
-            float yMax)
+            float yMax,
+            in SimVector2 fighter0Spawn,
+            in SimVector2 fighter1Spawn)
         {
             TickDeltaTime = tickDeltaTime;
             GravityAcceleration = gravityAcceleration;
@@ -50,10 +55,16 @@ namespace NetworkCourse.BalloonFight.Simulation
             XMax = xMax;
             YMin = yMin;
             YMax = yMax;
+            Fighter0Spawn = fighter0Spawn;
+            Fighter1Spawn = fighter1Spawn;
         }
 
         public static SimulationConfig CreateReference()
         {
+
+            SimVector2 fighter0Spawn = new SimVector2(-4.5f, 0f);
+            SimVector2 fighter1Spawn = new SimVector2(4.5f, 0f);
+
             return new SimulationConfig(
                 tickDeltaTime: RequiredTickDeltaTime,
                 gravityAcceleration: 18f,
@@ -68,7 +79,9 @@ namespace NetworkCourse.BalloonFight.Simulation
                 xMin: -7f,
                 xMax: 7f,
                 yMin: -4f,
-                yMax: 4f);
+                yMax: 4f,
+                fighter0Spawn : in fighter0Spawn,
+                fighter1Spawn : in fighter1Spawn);
         }
 
         public bool IsValid()
@@ -85,7 +98,14 @@ namespace NetworkCourse.BalloonFight.Simulation
                 && IsFinite(MaxRiseSpeed) && MaxRiseSpeed >= 0f
                 && IsFinite(MaxFallSpeed) && MaxFallSpeed >= 0f
                 && IsFinite(XMin) && IsFinite(XMax) && XMin < XMax
-                && IsFinite(YMin) && IsFinite(YMax) && YMin < YMax;
+                && IsFinite(YMin) && IsFinite(YMax) && YMin < YMax
+                && IsInsideArena(in Fighter0Spawn)
+                && IsInsideArena(in Fighter1Spawn);
+        }
+
+        private bool IsInsideArena(in SimVector2 position)
+        {
+            return IsFinite(position.X) && IsFinite(position.Y) && position.X >= XMin && position.X <= XMax && position.Y >= YMin && position.Y <= YMax;
         }
 
         private static bool IsFinite(float value)

@@ -1,0 +1,18 @@
+{
+    "name": "NetworkCourse.BalloonFight.Networking",
+    "rootNamespace": "NetworkCourse.BalloonFight.Networking",
+    "references": [
+        "GUID:afe1ff2b3f42a65e68edc34be01104a2",
+        "GUID:272d2006d3f2bf4da8113668928a18ca",
+        "GUID:1491147abca9d7d4bb7105af628b223e"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
