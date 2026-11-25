@@ -319,6 +319,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 6752428398508237990}
+  - component: {fileID: 4663364682176886679}
   m_Layer: 0
   m_Name: BalloonFighter
   m_TagString: Untagged
@@ -342,3 +343,17 @@ Transform:
   - {fileID: 2971625768329733809}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &4663364682176886679
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9078762733486753604}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0df46599635e19f4baa5f3a8c2ae066b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: NetworkCourse.BalloonFight.Engine::NetworkCourse.BalloonFight.Engine.BalloonFighterView
+  _slotIndex: 0
+  _visual: {fileID: 5499186347550758001}

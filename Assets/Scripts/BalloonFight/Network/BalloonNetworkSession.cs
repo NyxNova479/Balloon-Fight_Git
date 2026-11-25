@@ -4,9 +4,10 @@ using UnityEngine;
 
 namespace NetworkCourse.BalloonFight.Networking
 {
+
     public enum SlotAssignmentStatus : byte
     {
-        Assigned = 0, // false
+        Assigned = 0, //false
         AlreadyAssigned = 1,
         InvalidPreferredSlot = 2,
         Full = 3
@@ -19,6 +20,7 @@ namespace NetworkCourse.BalloonFight.Networking
         UnknownClient = 2,
         NotOwner = 3
     }
+
 
     public struct PlayerSlotTable
     {
@@ -39,6 +41,7 @@ namespace NetworkCourse.BalloonFight.Networking
             int preferredSlot,
             out int assignedSlot)
         {
+
             if (TryGetSlot(clientId, out assignedSlot))
             {
                 return SlotAssignmentStatus.AlreadyAssigned;
@@ -111,7 +114,6 @@ namespace NetworkCourse.BalloonFight.Networking
 
         public bool TryGetSlot(ulong clientId, out int slot)
         {
-
             if ((_occupiedMask & Slot0Bit) != 0
                 && _slot0ClientId == clientId)
             {
@@ -128,7 +130,6 @@ namespace NetworkCourse.BalloonFight.Networking
 
             slot = -1;
             return false;
-
         }
 
         public bool TryGetClient(int slot, out ulong clientId)
@@ -181,6 +182,8 @@ namespace NetworkCourse.BalloonFight.Networking
     {
 
         [SerializeField] private NetworkManager _networkManager;
+
+
         [SerializeField] private int _assignedConnections;
         [SerializeField] private int _releasedConnections;
         [SerializeField] private int _rejectedConnections;
@@ -189,8 +192,8 @@ namespace NetworkCourse.BalloonFight.Networking
         private bool _subscribed;
 
 
-        private event Action<int> SlotAssigned;
-        private event Action<int> SlotReleased;
+        public event Action<int> SlotAssigned;
+        public event Action<int> SlotReleased;
 
 
         public byte OccupiedMask => _slots.OccupiedMask;
@@ -201,7 +204,7 @@ namespace NetworkCourse.BalloonFight.Networking
 
         private void Awake()
         {
-            if(_networkManager == null)
+            if (_networkManager == null)
             {
                 enabled = false;
                 Debug.LogError("BalloonNetworkSession requires NetworkManager");
@@ -214,6 +217,7 @@ namespace NetworkCourse.BalloonFight.Networking
             _subscribed = true;
 
         }
+
         private void OnDestroy()
         {
             if (!_subscribed || _networkManager == null) return;
@@ -292,6 +296,10 @@ namespace NetworkCourse.BalloonFight.Networking
             if (slot1WasOccupied) SlotReleased?.Invoke(1);
         }
 
+
+
     }
+
+
 
 }
