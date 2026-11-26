@@ -12,6 +12,8 @@ namespace NetworkCourse.BalloonFight.Networking
         //En-tête : qui parle, dans quelle générattion, combien de commandes utiles
         public byte ClaimedSlot;
         public uint InputEpoch;
+        public bool HasSeenConfirmedEvent;
+        public uint LastSeenConfirmedEventId;
         public byte Count;
 
         // 8 cases fixes
@@ -29,12 +31,13 @@ namespace NetworkCourse.BalloonFight.Networking
         public static bool TryCreateNewest(
             byte claimedSlot,
             InputHistory history,
+            bool hasSeenConfirmedEvent,
+            uint lastSeenConfirmedEventId,
             out InputBatch batch)
         {
             batch = default;
             if (history == null
                 || !history.IsReady
-                || history.Count == 0
                 || claimedSlot > 1)
             {
                 return false;
@@ -46,6 +49,10 @@ namespace NetworkCourse.BalloonFight.Networking
             int firstIndex = history.Count - count;
             batch.ClaimedSlot = claimedSlot;
             batch.InputEpoch = history.InputEpoch;
+            batch.HasSeenConfirmedEvent = hasSeenConfirmedEvent;
+            batch.LastSeenConfirmedEventId = hasSeenConfirmedEvent
+                ? lastSeenConfirmedEventId
+                : 0u;
             batch.Count = (byte)count;
 
             for (int index = 0; index < count; index++)
@@ -66,7 +73,13 @@ namespace NetworkCourse.BalloonFight.Networking
         // 
         public bool IsStructurallyValid()
         {
-            if (ClaimedSlot > 1 || Count > Capacity) return false;
+            if (ClaimedSlot > 1
+                            || Count > Capacity
+                            || (!HasSeenConfirmedEvent
+                                && LastSeenConfirmedEventId != 0u))
+            {
+                return false;
+            }
 
             uint previousTick = 0u;
             for (int index = 0; index < Count; index++)
@@ -138,6 +151,8 @@ namespace NetworkCourse.BalloonFight.Networking
             serializer.SerializeValue(ref tick);
             serializer.SerializeValue(ref horizontal);
             serializer.SerializeValue(ref flapHeld);
+            serializer.SerializeValue(ref HasSeenConfirmedEvent);
+            serializer.SerializeValue(ref LastSeenConfirmedEventId);
 
             if (!serializer.IsReader) return;
 

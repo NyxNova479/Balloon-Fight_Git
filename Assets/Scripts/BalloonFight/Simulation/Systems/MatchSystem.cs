@@ -10,32 +10,72 @@ namespace NetworkCourse.BalloonFight.Simulation
                 && state.ResetApplyTick == currentTick;
         }
 
-        public static void Step(
+        public static MatchResolution Step(
             ref MatchState state,
-            uint currentTick,
-            bool debugRoundOverRequested)
+            in FighterState fighter0,
+            in FighterState fighter1,
+            bool fighter0Active,
+            bool fighter1Active,
+            uint currentTick)
         {
-            if (state.Phase == MatchPhase.Playing
-                && debugRoundOverRequested)
+            if (state.Phase != MatchPhase.Playing)
             {
-                state.Phase = MatchPhase.RoundOver;
-                state.ResetApplyTick = unchecked(currentTick + 1u);
-                return;
+                SimulationEvent none = default;
+                return new MatchResolution(false, false, in none);
             }
 
-            if (state.Phase == MatchPhase.RoundOver
-                && state.ResetApplyTick == currentTick)
+            bool fighter0Eliminated = fighter0Active
+                && fighter0.Phase == FighterPhase.Eliminated;
+            bool fighter1Eliminated = fighter1Active
+                && fighter1.Phase == FighterPhase.Eliminated;
+            if (!fighter0Eliminated && !fighter1Eliminated)
             {
-                state.Phase = MatchPhase.Resetting;
-                return;
+                SimulationEvent none = default;
+                return new MatchResolution(false, false, in none);
             }
 
-            if (state.Phase == MatchPhase.Resetting)
+            byte winner = MatchState.NoWinner;
+            SimulationEventType eventType = SimulationEventType.RoundDraw;
+            if (fighter0Eliminated && !fighter1Eliminated)
             {
-                state.Phase = MatchPhase.Playing;
-                state.RoundIndex = unchecked(state.RoundIndex + 1u);
-                state.ResetApplyTick = 0u;
+                winner = 1;
+                state.Fighter1Score = IncrementSaturated(
+                    state.Fighter1Score);
+                eventType = SimulationEventType.RoundWon;
             }
+            else if (fighter1Eliminated && !fighter0Eliminated)
+            {
+                winner = 0;
+                state.Fighter0Score = IncrementSaturated(
+                    state.Fighter0Score);
+                eventType = SimulationEventType.RoundWon;
+            }
+
+            state.Phase = MatchPhase.RoundOver;
+            state.WinnerSlot = winner;
+            state.HasLastRoundResult = true;
+            state.LastRoundWinnerSlot = winner;
+            state.ResetApplyTick = unchecked(currentTick + 1u);
+            SimulationEvent matchEvent = new SimulationEvent(
+                currentTick,
+                eventType,
+                winner,
+                winner,
+                byte.MaxValue);
+            return new MatchResolution(true, true, in matchEvent);
+        }
+
+        public static void ApplyRoundReset(ref MatchState state)
+        {
+            state.Phase = MatchPhase.Playing;
+            state.RoundIndex = unchecked(state.RoundIndex + 1u);
+            state.ResetApplyTick = 0u;
+            state.WinnerSlot = MatchState.NoWinner;
+        }
+
+        private static uint IncrementSaturated(uint value)
+        {
+            return value == uint.MaxValue ? value : value + 1u;
         }
     }
 }

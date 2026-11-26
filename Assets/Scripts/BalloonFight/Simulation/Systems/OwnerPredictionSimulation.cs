@@ -6,7 +6,8 @@ namespace NetworkCourse.BalloonFight.Simulation
         NotInitialized = 1,
         InvalidConfiguration = 2,
         WrongInputEpoch = 3,
-        TickMismatch = 4
+        TickMismatch = 4,
+        InvalidState
     }
 
     public sealed class OwnerPredictionSimulation
@@ -40,6 +41,11 @@ namespace NetworkCourse.BalloonFight.Simulation
             if (!_configurationIsValid)
             {
                 return OwnerPredictionStatus.InvalidConfiguration;
+            }
+
+            if(!IsValidFighterState(in officialFighter))
+            {
+                return OwnerPredictionStatus.InvalidState;
             }
 
             _fighter = officialFighter;
@@ -92,6 +98,65 @@ namespace NetworkCourse.BalloonFight.Simulation
                 in _fighter);
             _nextInputTick = unchecked(_nextInputTick + 1u);
             return OwnerPredictionStatus.Success;
+        }
+
+        public OwnerPredictionStatus Restore(
+            uint inputEpoch,
+            uint nextInputTick,
+            in FighterState officialFighter)
+        {
+            if (!_isInitialized)
+            {
+                return OwnerPredictionStatus.NotInitialized;
+            }
+
+            if (!_configurationIsValid)
+            {
+                return OwnerPredictionStatus.InvalidConfiguration;
+            }
+
+            if (inputEpoch != _inputEpoch)
+            {
+                return OwnerPredictionStatus.WrongInputEpoch;
+            }
+
+            if (!IsValidFighterState(in officialFighter))
+            {
+                return OwnerPredictionStatus.InvalidState;
+            }
+
+            _fighter = officialFighter;
+            _nextInputTick = nextInputTick;
+            return OwnerPredictionStatus.Success;
+        }
+
+        public static bool IsValidFighterState(in FighterState fighter)
+        {
+
+            bool phaseIsValid = fighter.Phase == FighterPhase.Flying
+                || fighter.Phase == FighterPhase.Falling
+                || fighter.Phase == FighterPhase.Eliminated;
+
+            bool balloonMaskIsValid =
+                (fighter.BalloonMask & ~FighterState.ValidBalloonMask) == 0
+                && (fighter.Phase == FighterPhase.Flying
+                    ? fighter.BalloonMask != 0
+                    : fighter.BalloonMask == 0);
+
+            return phaseIsValid
+                && balloonMaskIsValid
+                && IsFinite(fighter.Position.X)
+                && IsFinite(fighter.Position.Y)
+                && IsFinite(fighter.Velocity.X)
+                && IsFinite(fighter.Velocity.Y)
+                && IsFinite(fighter.FlapCooldownRemaining)
+                && fighter.FlapCooldownRemaining >= 0f;
+
+        }
+
+        private static bool IsFinite (float value)
+        {
+            return !float.IsNaN(value) && ! float.IsInfinity(value);
         }
     }
 }

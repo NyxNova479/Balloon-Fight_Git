@@ -164,8 +164,7 @@ namespace NetworkCourse.BalloonFight.Engine
 
             SimulationResult result = _simulation.Step(
                 in fighter0Input,
-                in fighter1Input,
-                _debugRoundOverRequested);
+                in fighter1Input);
             if (!result.Succeeded)
             {
                 StopWithError(
@@ -174,7 +173,7 @@ namespace NetworkCourse.BalloonFight.Engine
                 return false;
             }
 
-            _debugRoundOverRequested = false;
+
             _lastProcessedSlotOrder = result.ProcessedSlotOrder;
             SimulationSnapshot snapshot = result.Snapshot;
             _renderSnapshot = RenderSnapshot.FromSimulationSnapshot(in snapshot);

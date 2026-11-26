@@ -14,9 +14,16 @@ namespace NetworkCourse.BalloonFight.Simulation
     public struct MatchState
     {
 
+        public const byte NoWinner = byte.MaxValue;
+
         public MatchPhase Phase;
         public uint RoundIndex;
         public uint ResetApplyTick;
+        public uint Fighter0Score;
+        public uint Fighter1Score;
+        public byte WinnerSlot;
+        public bool HasLastRoundResult;
+        public byte LastRoundWinnerSlot;
 
         public static MatchState CreatePlaying()
         {
@@ -24,7 +31,12 @@ namespace NetworkCourse.BalloonFight.Simulation
             {
                 Phase = MatchPhase.Playing,
                 RoundIndex = 0u,
-                ResetApplyTick = 0u
+                ResetApplyTick = 0u,
+                Fighter0Score = 0u,
+                Fighter1Score = 0u,
+                WinnerSlot = NoWinner,
+                HasLastRoundResult = false,
+                LastRoundWinnerSlot = NoWinner
             };
         }
 

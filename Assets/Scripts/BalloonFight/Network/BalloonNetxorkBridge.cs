@@ -215,13 +215,23 @@ namespace NetworkCourse.BalloonFight.Networking
 
             _session.TryGetClient(0, out ulong slot0ClientId);
             _session.TryGetClient(1, out ulong slot1ClientId);
+
+            if (!_tickRunner.TryCreateConfirmedEventWindows(
+                out ConfirmedEventWindow slot0Events,
+                out ConfirmedEventWindow slot1Events))
+            {
+                return;
+            }
+
             NetworkSnapshot message = NetworkSnapshot.Create(
                 in simulationSnapshot,
                 _session.OccupiedMask,
                 slot0ClientId,
                 slot1ClientId,
                 in slot0InputAck,
-                in slot1InputAck);
+                in slot1InputAck,
+                in slot0Events,
+                in slot1Events);
 
             _lastPublishedServerTick = simulationSnapshot.Tick;
             _hasPublishedSnapshot = true;
@@ -257,6 +267,23 @@ namespace NetworkCourse.BalloonFight.Networking
                 _validationRejections = IncrementSaturated(
                     _validationRejections);
                 return;
+            }
+
+            if (!batch.IsStructurallyValid())
+            {
+                _validationRejections = IncrementSaturated(
+                    _validationRejections);
+                return;
+            }
+
+            if (batch.InputEpoch == inputEpoch
+                && !_tickRunner.ObserveConfirmedEventCursor(
+                    validatedSlot,
+                    batch.HasSeenConfirmedEvent,
+                    batch.LastSeenConfirmedEventId))
+            {
+                _validationRejections = IncrementSaturated(
+                    _validationRejections);
             }
 
             InputBatchAcceptResult result = _inbox.TryAcceptBatch(
@@ -325,13 +352,33 @@ namespace NetworkCourse.BalloonFight.Networking
                 out int localSlot)
                 ? localSlot
                 : -1;
+
             _tickRunner.SetLocalSlot(_localSlotIndex);
+
+            if (_localSlotIndex >= 0)
+            {
+                if (message.TryGetLocalConfirmedEvents(
+                    _networkManager.LocalClientId,
+                    out ConfirmedEventWindow confirmedEvents))
+                {
+                    _tickRunner.StageLocalConfirmedEvents(
+                        message.ServerTick,
+                        in confirmedEvents);
+                }
+                else
+                {
+                    _validationRejections = IncrementSaturated(
+                        _validationRejections);
+                }
+            }
+
             if (message.TryGetLocalPredictionBase(
                 _networkManager.LocalClientId,
                 out NetworkInputAck ack,
                 out FighterState officialFighter))
             {
-                _tickRunner.AcceptLocalOfficialState(
+                _tickRunner.StageLocalOfficialState(
+                    message.ServerTick,
                     in ack,
                     in officialFighter);
             }
@@ -344,12 +391,14 @@ namespace NetworkCourse.BalloonFight.Networking
         private void HandleSlotReleased(int slot)
         {
             _inputStreamControl.TryDeactivateSlot(slot, _inbox);
+            _tickRunner.DeactivateConfirmedEventSlot(slot);
             _tickRunner.SetServerSimulationEnabled(false);
         }
 
         private void HandleSlotAssigned(int slot)
         {
             _inputStreamControl.TryActivateSlot(slot, _inbox, out _);
+            _tickRunner.ActivateConfirmedEventSlot(slot);
             _tickRunner.SetServerSimulationEnabled(
                 _session.ConnectedSlotCount == 2);
         }
@@ -359,6 +408,7 @@ namespace NetworkCourse.BalloonFight.Networking
             if (!_session.TryGetClient(slot, out _)) return;
 
             _inputStreamControl.TryActivateSlot(slot, _inbox, out _);
+            _tickRunner.ActivateConfirmedEventSlot(slot);
         }
 
         private void CountSentBatch()

@@ -44,6 +44,8 @@ namespace NetworkCourse.BalloonFight.Engine
             new ProfilerMarker("BalloonFight.ServerSimulationStep");
         private static readonly ProfilerMarker PredictionStepMarker =
             new ProfilerMarker("BalloonFight.OwnerPredictionStep");
+        private static readonly ProfilerMarker ReconciliationStepMarker =
+            new ProfilerMarker("BalloonFight.OwnerReconciliationStep");
         private static readonly ProfilerMarker RenderStepMarker =
             new ProfilerMarker("BalloonFight.RenderStep");
 
@@ -78,6 +80,15 @@ namespace NetworkCourse.BalloonFight.Engine
         [SerializeField] private float _latestPredictionPositionError;
         [SerializeField] private float _latestPredictionVelocityError;
         [SerializeField] private float _maximumPredictionPositionError;
+        [SerializeField] private ReconciliationStatus _lastReconciliationStatus;
+        [SerializeField] private int _lastReplayCount;
+        [SerializeField] private uint _totalReplayCount;
+        [SerializeField] private uint _correctionCount;
+        [SerializeField] private uint _hardResyncCount;
+        [SerializeField] private uint _staleOwnerStateCount;
+        [SerializeField] private uint _missedConfirmedEvents;
+        [SerializeField] private uint _duplicateConfirmedEvents;
+        [SerializeField] private uint _invalidConfirmedWindows;
 
         private readonly SnapshotInterpolationBuffer _snapshotBuffer =
             new SnapshotInterpolationBuffer();
@@ -90,6 +101,16 @@ namespace NetworkCourse.BalloonFight.Engine
             new InputHistory();
         private readonly PredictionHistory _predictionHistory =
             new PredictionHistory();
+        private readonly PredictionReconciler _predictionReconciler =
+            new PredictionReconciler(
+                PredictionReconciliationConfig.CreateReference());
+
+        private readonly ConfirmedEventHistory _confirmedEventHistory =
+            new ConfirmedEventHistory();
+        private readonly ConfirmedEventCursor _confirmedEventCursor =
+            new ConfirmedEventCursor();
+        private readonly ClientConfirmedEventBuffer _confirmedEventOutput =
+            new ClientConfirmedEventBuffer();
 
         private NetworkCommandInbox _inbox;
         private InputStreamControl _inputStreamControl;
@@ -111,8 +132,15 @@ namespace NetworkCourse.BalloonFight.Engine
         private bool _hardResyncRequestPending;
         private NetworkInputAck _latestSlot0InputAck;
         private NetworkInputAck _latestSlot1InputAck;
-        private PredictionSnapshot _latestPredictionSnapshot;
-        private bool _hasPredictionSnapshot;
+        private FighterState _latestPredictedFighter;
+        private bool _hasPredictedFighter;
+        private bool _hasPendingOwnerOfficialState;
+        private uint _pendingOwnerOfficialServerTick;
+        private NetworkInputAck _pendingOwnerAck;
+        private FighterState _pendingOwnerOfficialFighter;
+        private ConfirmedEventWindow _pendingConfirmedEvents;
+        private uint _pendingConfirmedServerTick;
+        private bool _hasPendingConfirmedEvents;
 
         public TickRunnerMode Mode => _mode;
         public TickRunnerStatus Status => _status;
@@ -147,6 +175,13 @@ namespace NetworkCourse.BalloonFight.Engine
             _latestPredictionVelocityError;
         public float MaximumPredictionPositionError =>
             _maximumPredictionPositionError;
+        public ReconciliationStatus LastReconciliationStatus =>
+            _lastReconciliationStatus;
+        public int LastReplayCount => _lastReplayCount;
+        public uint TotalReplayCount => _totalReplayCount;
+        public uint CorrectionCount => _correctionCount;
+        public uint HardResyncCount => _hardResyncCount;
+        public uint StaleOwnerStateCount => _staleOwnerStateCount;
         public uint SynthesizedServerInputCount => _inputStreamControl == null
             ? 0u
             : _inputStreamControl.SynthesizedInputCount;
@@ -170,9 +205,12 @@ namespace NetworkCourse.BalloonFight.Engine
         {
             if (_status != TickRunnerStatus.Running) return;
 
+            ProcessPendingConfirmedEvents();
+
             if (_localOwnerStreamEnabled)
             {
                 _localInputCapture.FrameUpdate();
+                ProcessPendingLocalOfficialState();
                 AdvanceOwnerInputClock();
             }
 
@@ -319,7 +357,25 @@ namespace NetworkCourse.BalloonFight.Engine
             _latestPredictionPositionError = 0f;
             _latestPredictionVelocityError = 0f;
             _maximumPredictionPositionError = 0f;
-            _hasPredictionSnapshot = false;
+            _lastReconciliationStatus = ReconciliationStatus.NoCorrection;
+            _lastReplayCount = 0;
+            _totalReplayCount = 0u;
+            _correctionCount = 0u;
+            _hardResyncCount = 0u;
+            _staleOwnerStateCount = 0u;
+
+            _confirmedEventHistory.Reset();
+            _confirmedEventCursor.Reset();
+            _confirmedEventOutput.Clear();
+            _pendingConfirmedEvents = default;
+            _pendingConfirmedServerTick = 0u;
+            _hasPendingConfirmedEvents = false;
+            _missedConfirmedEvents = 0u;
+            _duplicateConfirmedEvents = 0u;
+            _invalidConfirmedWindows = 0u;
+
+            _hasPredictedFighter = false;
+            _hasPendingOwnerOfficialState = false;
             _latestSlot0InputAck = default;
             _latestSlot1InputAck = default;
             _ownerInputHistory.Reset();
@@ -342,6 +398,7 @@ namespace NetworkCourse.BalloonFight.Engine
                 && _hasSimulationSnapshot;
         }
 
+
         public bool TryCreateNewestInputBatch(
             int localSlotIndex,
             out InputBatch batch)
@@ -357,10 +414,93 @@ namespace NetworkCourse.BalloonFight.Engine
             return InputBatch.TryCreateNewest(
                 (byte)localSlotIndex,
                 _ownerInputHistory,
+                _confirmedEventCursor.HasSeen,
+                _confirmedEventCursor.LastSeenEventId,
                 out batch);
         }
 
-        public OwnerInputControlStatus AcceptLocalOfficialState(
+        public bool ActivateConfirmedEventSlot(int slot)
+        {
+            return _mode == TickRunnerMode.Server
+                && _confirmedEventHistory.ActivateSlot(slot)
+                    == ConfirmedEventCursorStatus.Success;
+        }
+
+        public bool DeactivateConfirmedEventSlot(int slot)
+        {
+            return _mode == TickRunnerMode.Server
+                && _confirmedEventHistory.DeactivateSlot(slot)
+                    == ConfirmedEventCursorStatus.Success;
+        }
+
+        public bool ObserveConfirmedEventCursor(
+            int slot,
+            bool hasSeen,
+            uint lastSeenEventId)
+        {
+            return _mode == TickRunnerMode.Server
+                && _confirmedEventHistory.ObserveCursor(
+                    slot,
+                    hasSeen,
+                    lastSeenEventId) == ConfirmedEventCursorStatus.Success;
+        }
+
+        public bool TryCreateConfirmedEventWindows(
+            out ConfirmedEventWindow slot0,
+            out ConfirmedEventWindow slot1)
+        {
+            ConfirmedEventCursorStatus status0 =
+                _confirmedEventHistory.CreateWindowForSlot(0, out slot0);
+            ConfirmedEventCursorStatus status1 =
+                _confirmedEventHistory.CreateWindowForSlot(1, out slot1);
+            return IsWindowStatusUsable(status0)
+                && IsWindowStatusUsable(status1);
+        }
+
+        private static bool IsWindowStatusUsable(
+            ConfirmedEventCursorStatus status)
+        {
+            return status == ConfirmedEventCursorStatus.Success
+                || status == ConfirmedEventCursorStatus.InactiveSlot;
+        }
+
+
+        public bool StageLocalOfficialState(
+            uint serverTick,
+            in NetworkInputAck ack,
+            in FighterState officialFighter)
+        {
+            if (!_localOwnerStreamEnabled) return false;
+
+            if (_hasPendingOwnerOfficialState
+                && !ShouldReplacePendingOwnerState(serverTick, in ack))
+            {
+                _staleOwnerStateCount = IncrementSaturated(
+                    _staleOwnerStateCount);
+                return false;
+            }
+
+            _pendingOwnerOfficialServerTick = serverTick;
+            _pendingOwnerAck = ack;
+            _pendingOwnerOfficialFighter = officialFighter;
+            _hasPendingOwnerOfficialState = true;
+            return true;
+        }
+
+        private void ProcessPendingLocalOfficialState()
+        {
+            if (!_hasPendingOwnerOfficialState) return;
+
+            NetworkInputAck ack = _pendingOwnerAck;
+            FighterState officialFighter = _pendingOwnerOfficialFighter;
+            _hasPendingOwnerOfficialState = false;
+            using (ReconciliationStepMarker.Auto())
+            {
+                ApplyLocalOfficialState(in ack, in officialFighter);
+            }
+        }
+
+        private OwnerInputControlStatus ApplyLocalOfficialState(
             in NetworkInputAck ack,
             in FighterState officialFighter)
         {
@@ -383,6 +523,8 @@ namespace NetworkCourse.BalloonFight.Engine
                         ack.InputEpoch,
                         _ownerInputHistory.InputEpoch))
                 {
+                    _staleOwnerStateCount = IncrementSaturated(
+                        _staleOwnerStateCount);
                     return OwnerInputControlStatus.StaleEpoch;
                 }
 
@@ -403,7 +545,10 @@ namespace NetworkCourse.BalloonFight.Engine
                     _localInputCapture.FlapPressSequence;
                 _hardResyncRequestPending = false;
                 _hardResyncRequested = false;
-                _hasPredictionSnapshot = false;
+                _latestPredictedFighter = officialFighter;
+                _hasPredictedFighter = true;
+                _fighter0View.CancelPredictionCorrection();
+                _fighter1View.CancelPredictionCorrection();
                 ResetPredictionErrors();
                 RefreshOwnerInputDiagnostics();
                 return OwnerInputControlStatus.EpochStarted;
@@ -416,59 +561,116 @@ namespace NetworkCourse.BalloonFight.Engine
                     _ownerPredictionSimulation.Initialize(
                         ack.InputEpoch,
                         in officialFighter);
+                    _latestPredictedFighter = officialFighter;
+                    _hasPredictedFighter = true;
                 }
 
                 return OwnerInputControlStatus.WaitingForFirstAck;
             }
 
-            if (_predictionHistory.HasAck
-                && !SequenceMath.IsNewer(
-                    ack.LastProcessedInputTick,
-                    _predictionHistory.LastAckTick))
+            ReconciliationResult result = _predictionReconciler.Reconcile(
+                ack.InputEpoch,
+                ack.LastProcessedInputTick,
+                in officialFighter,
+                _ownerPredictionSimulation,
+                _ownerInputHistory,
+                _predictionHistory);
+            _lastReconciliationStatus = result.Status;
+            _lastReplayCount = result.ReplayedInputCount;
+            if (result.Status == ReconciliationStatus.StaleAck)
             {
+                _staleOwnerStateCount = IncrementSaturated(
+                    _staleOwnerStateCount);
                 return OwnerInputControlStatus.AckApplied;
             }
 
-            PredictionHistoryStatus lookupStatus =
-                _predictionHistory.TryGet(
-                    ack.InputEpoch,
-                    ack.LastProcessedInputTick,
-                    out PredictionSnapshot predictedAtAck);
-            if (lookupStatus != PredictionHistoryStatus.Success)
+            MeasurePredictionError(in result);
+            if (!result.Succeeded)
             {
                 RequestHardResync();
+                _fighter0View.CancelPredictionCorrection();
+                _fighter1View.CancelPredictionCorrection();
                 return OwnerInputControlStatus.AckRejected;
             }
 
-            MeasurePredictionError(
-                in predictedAtAck,
-                in officialFighter);
-
-            InputHistoryStatus purgeStatus =
-                _ownerInputHistory.PurgeThrough(
-                    ack.InputEpoch,
-                    ack.LastProcessedInputTick);
-            if (purgeStatus == InputHistoryStatus.AckAhead
-                || purgeStatus == InputHistoryStatus.WrongEpoch)
+            if (result.Corrected)
             {
-                RequestHardResync();
-                return OwnerInputControlStatus.AckRejected;
-            }
-
-            PredictionHistoryStatus predictionPurgeStatus =
-                _predictionHistory.PurgeThrough(
-                    ack.InputEpoch,
-                    ack.LastProcessedInputTick);
-            if (predictionPurgeStatus == PredictionHistoryStatus.AckAhead
-                || predictionPurgeStatus
-                    == PredictionHistoryStatus.WrongInputEpoch)
-            {
-                RequestHardResync();
-                return OwnerInputControlStatus.AckRejected;
+                _correctionCount = IncrementSaturated(_correctionCount);
+                _totalReplayCount = AddSaturated(
+                    _totalReplayCount,
+                    result.ReplayedInputCount);
+                _latestPredictedFighter = result.NewPredictedCurrent;
+                _hasPredictedFighter = true;
+                if (!_fighter0View.BeginOwnerPredictionCorrection(
+                        in result.PreviousPredictedCurrent,
+                        in result.NewPredictedCurrent)
+                    || !_fighter1View.BeginOwnerPredictionCorrection(
+                        in result.PreviousPredictedCurrent,
+                        in result.NewPredictedCurrent))
+                {
+                    RequestHardResync();
+                    return OwnerInputControlStatus.AckRejected;
+                }
             }
 
             RefreshOwnerInputDiagnostics();
             return OwnerInputControlStatus.AckApplied;
+        }
+
+        private bool ShouldReplacePendingOwnerState(
+            uint serverTick,
+            in NetworkInputAck candidateAck)
+        {
+            if (candidateAck.InputEpoch != _pendingOwnerAck.InputEpoch)
+            {
+                return SequenceMath.IsNewer(
+                    candidateAck.InputEpoch,
+                    _pendingOwnerAck.InputEpoch);
+            }
+
+            return SequenceMath.IsNewer(
+                serverTick,
+                _pendingOwnerOfficialServerTick);
+        }
+
+        public bool StageLocalConfirmedEvents(
+            uint serverTick,
+            in ConfirmedEventWindow window)
+        {
+            if (_hasPendingConfirmedEvents
+                && !SequenceMath.IsNewer(
+                    serverTick,
+                    _pendingConfirmedServerTick))
+            {
+                return false;
+            }
+
+            _pendingConfirmedServerTick = serverTick;
+            _pendingConfirmedEvents = window;
+            _hasPendingConfirmedEvents = true;
+            return true;
+        }
+
+        private void ProcessPendingConfirmedEvents()
+        {
+            if (!_hasPendingConfirmedEvents) return;
+
+            ConfirmedEventWindow window = _pendingConfirmedEvents;
+            _hasPendingConfirmedEvents = false;
+            ConfirmedEventConsumeStatus status = _confirmedEventCursor.Consume(
+                in window,
+                _confirmedEventOutput);
+            if (status != ConfirmedEventConsumeStatus.Success)
+            {
+                _invalidConfirmedWindows = IncrementSaturated(
+                    _invalidConfirmedWindows);
+                return;
+            }
+
+            _missedConfirmedEvents =
+                _confirmedEventCursor.MissedConfirmedEvents;
+            _duplicateConfirmedEvents =
+                _confirmedEventCursor.DuplicateEventCount;
         }
 
         public bool TryTakeHardResyncRequest(out uint inputEpoch)
@@ -648,8 +850,8 @@ namespace NetworkCourse.BalloonFight.Engine
                 return false;
             }
 
-            _latestPredictionSnapshot = predictionSnapshot;
-            _hasPredictionSnapshot = true;
+            _latestPredictedFighter = predictionSnapshot.Fighter;
+            _hasPredictedFighter = true;
 
             _lastProducedFlapPressSequence = flapPressSequence;
             _producedOwnerInputCount = IncrementSaturated(
@@ -660,6 +862,11 @@ namespace NetworkCourse.BalloonFight.Engine
 
         private void RequestHardResync()
         {
+            if (!_hardResyncRequested)
+            {
+                _hardResyncCount = IncrementSaturated(_hardResyncCount);
+            }
+
             _hardResyncRequested = true;
             _hardResyncRequestPending = true;
             _ownerInputAccumulatorSeconds = 0d;
@@ -673,23 +880,12 @@ namespace NetworkCourse.BalloonFight.Engine
             _predictionHistoryCount = _predictionHistory.Count;
         }
 
-        private void MeasurePredictionError(
-            in PredictionSnapshot predicted,
-            in FighterState official)
+        private void MeasurePredictionError(in ReconciliationResult result)
         {
-            FighterState predictedFighter = predicted.Fighter;
-            float positionX = predictedFighter.Position.X
-                - official.Position.X;
-            float positionY = predictedFighter.Position.Y
-                - official.Position.Y;
-            float velocityX = predictedFighter.Velocity.X
-                - official.Velocity.X;
-            float velocityY = predictedFighter.Velocity.Y
-                - official.Velocity.Y;
             _latestPredictionPositionError = Mathf.Sqrt(
-                positionX * positionX + positionY * positionY);
+                result.PositionErrorSquared);
             _latestPredictionVelocityError = Mathf.Sqrt(
-                velocityX * velocityX + velocityY * velocityY);
+                result.VelocityErrorSquared);
             if (_latestPredictionPositionError
                 > _maximumPredictionPositionError)
             {
@@ -766,10 +962,12 @@ namespace NetworkCourse.BalloonFight.Engine
                 return false;
             }
 
+            _confirmedEventHistory.AppendFrom(_simulation.Events);
             _latestSimulationSnapshot = result.Snapshot;
             _latestSlot0InputAck = slot0InputAck;
             _latestSlot1InputAck = slot1InputAck;
             _hasSimulationSnapshot = true;
+
             return true;
         }
 
@@ -797,8 +995,17 @@ namespace NetworkCourse.BalloonFight.Engine
             }
 
             _interpolationStarved = starved;
-            FighterState predictedOwner = _hasPredictionSnapshot
-                ? _latestPredictionSnapshot.Fighter
+            if (!_fighter0View.AdvancePredictionCorrection(
+                    Time.unscaledDeltaTime)
+                || !_fighter1View.AdvancePredictionCorrection(
+                    Time.unscaledDeltaTime))
+            {
+                RequestHardResync();
+                return;
+            }
+
+            FighterState predictedOwner = _hasPredictedFighter
+                ? _latestPredictedFighter
                 : default;
             SimVector2 officialFighter0 = new SimVector2(
                 _latestOfficialSnapshot.Fighter0.PositionX,
@@ -815,7 +1022,7 @@ namespace NetworkCourse.BalloonFight.Engine
                 in sample.Fighter0Position,
                 in sample.Fighter1Position,
                 _localSlotIndex,
-                _showOwnerPrediction && _hasPredictionSnapshot,
+                _showOwnerPrediction && _hasPredictedFighter,
                 in predictedOwner);
             if (!_fighter0View.RenderStep(in _latestRenderSnapshot)
                 || !_fighter1View.RenderStep(in _latestRenderSnapshot))
@@ -856,6 +1063,15 @@ namespace NetworkCourse.BalloonFight.Engine
         private static uint IncrementSaturated(uint value)
         {
             return value == uint.MaxValue ? value : value + 1u;
+        }
+
+        private static uint AddSaturated(uint value, int addition)
+        {
+            if (addition <= 0) return value;
+
+            uint remaining = uint.MaxValue - value;
+            uint amount = (uint)addition;
+            return amount > remaining ? uint.MaxValue : value + amount;
         }
     }
 }

@@ -1,6 +1,3 @@
-using NetworkCourse.BalloonFight.Simulation;
-
-
 namespace NetworkCourse.BalloonFight.Simulation
 {
     public static class FighterMotionSystem
@@ -10,15 +7,17 @@ namespace NetworkCourse.BalloonFight.Simulation
             in FighterInput input,
             in SimulationConfig config)
         {
-            if (state.Phase != FighterPhase.Flying) return;
+            if (state.Phase == FighterPhase.Eliminated) return;
 
             float dt = config.TickDeltaTime;
             float cooldown = state.FlapCooldownRemaining - dt;
             if (cooldown < 0f) cooldown = 0f;
 
-            float targetVelocityX = input.Horizontal
+            bool canControl = state.Phase == FighterPhase.Flying;
+            float horizontalInput = canControl ? input.Horizontal : 0f;
+            float targetVelocityX = horizontalInput
                 * config.MaxHorizontalSpeed;
-            float horizontalRate = Abs(input.Horizontal) > 0.001f
+            float horizontalRate = Abs(horizontalInput) > 0.001f
                 ? config.HorizontalAcceleration
                 : config.HorizontalDrag;
             float velocityX = MoveTowards(
@@ -27,15 +26,22 @@ namespace NetworkCourse.BalloonFight.Simulation
                 horizontalRate * dt);
 
             float velocityY = state.Velocity.Y;
-            if (input.FlapPressed && cooldown <= 0f)
+            if (canControl && input.FlapPressed && cooldown <= 0f)
             {
                 velocityY += config.FlapImpulse;
                 cooldown = config.FlapCooldown;
             }
 
-            float verticalAcceleration = config.LiftAcceleration
-                - config.GravityAcceleration;
-            velocityY += verticalAcceleration * dt;
+            float lift = 0f;
+            if (canControl)
+            {
+                lift = state.BalloonCount == 1
+                    ? config.LiftAcceleration
+                        * config.OneBalloonLiftMultiplier
+                    : config.LiftAcceleration;
+            }
+
+            velocityY += (lift - config.GravityAcceleration) * dt;
             velocityY = Clamp(
                 velocityY,
                 -config.MaxFallSpeed,
@@ -43,7 +49,34 @@ namespace NetworkCourse.BalloonFight.Simulation
 
             float positionX = state.Position.X + velocityX * dt;
             float positionY = state.Position.Y + velocityY * dt;
+            ClampToArena(
+                ref positionX,
+                ref positionY,
+                ref velocityX,
+                ref velocityY,
+                in config);
 
+            state.Position = new SimVector2(positionX, positionY);
+            state.Velocity = new SimVector2(velocityX, velocityY);
+            state.FlapCooldownRemaining = cooldown;
+        }
+
+        public static void ResetForRound(
+            ref FighterState state,
+            in SimVector2 spawnPosition)
+        {
+            state.Position = spawnPosition;
+            state.Velocity = new SimVector2(0f, 0f);
+            state.FlapCooldownRemaining = 0f;
+        }
+
+        private static void ClampToArena(
+            ref float positionX,
+            ref float positionY,
+            ref float velocityX,
+            ref float velocityY,
+            in SimulationConfig config)
+        {
             if (positionX < config.XMin)
             {
                 positionX = config.XMin;
@@ -65,20 +98,6 @@ namespace NetworkCourse.BalloonFight.Simulation
                 positionY = config.YMax;
                 if (velocityY > 0f) velocityY = 0f;
             }
-
-            state.Position = new SimVector2(positionX, positionY);
-            state.Velocity = new SimVector2(velocityX, velocityY);
-            state.FlapCooldownRemaining = cooldown;
-        }
-
-        public static void ResetForRound(
-            ref FighterState state,
-            in SimVector2 spawnPosition)
-        {
-            state.Phase = FighterPhase.Flying;
-            state.Position = spawnPosition;
-            state.Velocity = new SimVector2(0f, 0f);
-            state.FlapCooldownRemaining = 0f;
         }
 
         private static float MoveTowards(

@@ -1,26 +1,31 @@
+using NetworkCourse.BalloonFight.Simulation;
 using UnityEngine;
 
 namespace NetworkCourse.BalloonFight.Engine
 {
-
     public enum FighterViewRole : byte
     {
-
         Unassigned = 0,
         Owner = 1,
-        Remote = 2,
-
+        Remote = 2
     }
-
 
     public sealed class BalloonFighterView : MonoBehaviour
     {
-        [SerializeField, Range(0,1)] private int _slotIndex;
+        private const float CorrectionDecayRate = 14f;
+        private const float MaximumCorrectionDistance = 1.5f;
+        private const float CorrectionStopDistance = 0.001f;
+
+        [SerializeField, Range(0, 1)] private int _slotIndex;
         [SerializeField] private GameObject _visual;
         [SerializeField] private GameObject _officialGhost;
         [SerializeField] private bool _showOfficialGhost;
         [SerializeField] private FighterViewRole _role;
+        [SerializeField] private float _correctionOffsetMagnitude;
+        [SerializeField] private uint _smoothedCorrectionCount;
+        [SerializeField] private uint _hardSnapCount;
 
+        private VisualCorrectionState _visualCorrection;
         private bool _hasRendered;
         private bool _lastActive;
         private bool _lastGhostActive;
@@ -28,24 +33,69 @@ namespace NetworkCourse.BalloonFight.Engine
         public int SlotIndex => _slotIndex;
         public FighterViewRole Role => _role;
         public Vector3 PresentedPosition => transform.position;
-        public Vector3 OfficialGhostPosition => _officialGhost.transform.position;
-
+        public Vector3 OfficialGhostPosition =>
+            _officialGhost.transform.position;
+        public float CorrectionOffsetMagnitude =>
+            _correctionOffsetMagnitude;
+        public uint SmoothedCorrectionCount =>
+            _smoothedCorrectionCount;
+        public uint HardSnapCount => _hardSnapCount;
         public bool HasForbiddenCollider =>
             GetComponent<Collider2D>() != null
             || _visual.GetComponentInChildren<Collider2D>(true) != null
             || _officialGhost.GetComponentInChildren<Collider2D>(true) != null;
-
         public bool IsConfigured => _visual != null
             && _officialGhost != null
             && (_slotIndex == 0 || _slotIndex == 1);
 
         public void SetLocalSlot(int localSlotIndex)
         {
-            _role = localSlotIndex < 0
+            FighterViewRole nextRole = localSlotIndex < 0
                 ? FighterViewRole.Unassigned
                 : (_slotIndex == localSlotIndex
                     ? FighterViewRole.Owner
                     : FighterViewRole.Remote);
+            if (nextRole != _role)
+            {
+                _visualCorrection.Reset();
+                RefreshCorrectionDiagnostics();
+            }
+
+            _role = nextRole;
+        }
+
+        public bool BeginOwnerPredictionCorrection(
+            in FighterState previousPredicted,
+            in FighterState newPredicted)
+        {
+            if (_role != FighterViewRole.Owner) return true;
+
+            Vector3 previous = ToVector3(in previousPredicted.Position);
+            Vector3 next = ToVector3(in newPredicted.Position);
+            VisualCorrectionResult result = _visualCorrection.Begin(
+                in previous,
+                in next,
+                MaximumCorrectionDistance);
+            RefreshCorrectionDiagnostics();
+            return result != VisualCorrectionResult.InvalidConfiguration;
+        }
+
+        public bool AdvancePredictionCorrection(float unscaledDeltaTime)
+        {
+            if (_role != FighterViewRole.Owner) return true;
+
+            bool succeeded = _visualCorrection.Advance(
+                unscaledDeltaTime,
+                CorrectionDecayRate,
+                CorrectionStopDistance);
+            RefreshCorrectionDiagnostics();
+            return succeeded;
+        }
+
+        public void CancelPredictionCorrection()
+        {
+            _visualCorrection.Cancel();
+            RefreshCorrectionDiagnostics();
         }
 
         public bool RenderStep(in RenderSnapshot snapshot)
@@ -80,13 +130,28 @@ namespace NetworkCourse.BalloonFight.Engine
             _hasRendered = true;
             if (!isActive) return true;
 
-            transform.position = position;
+            transform.position = _role == FighterViewRole.Owner
+                ? position + _visualCorrection.Offset
+                : position;
             if (showOfficialGhost)
             {
                 _officialGhost.transform.position = officialPosition;
             }
 
             return true;
+        }
+
+        private void RefreshCorrectionDiagnostics()
+        {
+            _correctionOffsetMagnitude = _visualCorrection.Magnitude;
+            _smoothedCorrectionCount =
+                _visualCorrection.SmoothedCorrectionCount;
+            _hardSnapCount = _visualCorrection.HardSnapCount;
+        }
+
+        private static Vector3 ToVector3(in SimVector2 position)
+        {
+            return new Vector3(position.X, position.Y, 0f);
         }
     }
 }

@@ -152,6 +152,26 @@ namespace NetworkCourse.BalloonFight.Simulation
             return PredictionHistoryStatus.Success;
         }
 
+        public PredictionHistoryStatus PrepareReplayAfter(
+            uint inputEpoch,
+            uint acknowledgedInputTick)
+        {
+
+            if (!_isReady || inputEpoch != _inputEpoch)
+            {
+                return PredictionHistoryStatus.WrongInputEpoch;
+            }
+
+            _snapshots.Clear();
+            _nextInputTick = unchecked(acknowledgedInputTick + 1u);
+            _hasProduced = false;
+            _lastProducedTick = acknowledgedInputTick;
+            _hasAck = false;
+            _lastAckTick = acknowledgedInputTick;
+            return PredictionHistoryStatus.Success;
+
+        }
+
         public bool TryGetNewest(out PredictionSnapshot snapshot)
         {
             return _snapshots.TryGetAt(_snapshots.Count - 1, out snapshot);
