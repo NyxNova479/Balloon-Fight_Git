@@ -65,6 +65,17 @@ namespace NetworkCourse.BalloonFight.Networking
         {
             return candidate == reference;
         }
+
+        public static bool IsNewer(uint value, uint reference)
+        {
+            uint distance = unchecked(value - reference);
+            return distance != 0u && distance < 0x8000_0000u;
+        }
+
+        public static bool IsAtOrBefore(uint value, uint reference)
+        {
+            return value == reference || IsNewer(reference, value);
+        }
     }
 
 }

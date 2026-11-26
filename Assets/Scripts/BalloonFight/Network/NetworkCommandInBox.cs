@@ -2,190 +2,299 @@ using NetworkCourse.BalloonFight.Simulation;
 
 namespace NetworkCourse.BalloonFight.Networking
 {
-
-    public enum IntentAcceptStatus : byte
+    public enum InputBatchAcceptStatus : byte
     {
         Accepted = 0,
-        InvalidSlot = 1,
-        InvalidPayload = 2,
-        StaleOrDuplicate = 3,
-        SequenceGapTooLarge = 4,
-        InvalidFlapSequence = 5
+        NoNewCommands = 1,
+        WrongSlot = 2,
+        WrongInputEpoch = 3,
+        InvalidBatch = 4,
+        OutsideReceiveWindow = 5,
+        InboxFull = 6
     }
 
-    internal struct SlotCommandState
+    public readonly struct InputBatchAcceptResult
     {
-        public bool HasIntent;
-        public float Horizontal;
-        public bool FlapHeld;
-        public uint LastIntentSequence;
-        public uint LastFlapPressSequence;
-        public bool PendingFlapPress;
+        public readonly InputBatchAcceptStatus Status;
+        public readonly byte AcceptedCount;
+        public readonly byte DuplicateCount;
+        public readonly byte StaleCount;
+
+        public InputBatchAcceptResult(
+            InputBatchAcceptStatus status,
+            byte acceptedCount,
+            byte duplicateCount,
+            byte staleCount)
+        {
+            Status = status;
+            AcceptedCount = acceptedCount;
+            DuplicateCount = duplicateCount;
+            StaleCount = staleCount;
+        }
     }
 
     public sealed class NetworkCommandInbox
     {
+        public const int CapacityPerSlot = 64;
 
-        private const uint MaxIntentSequenceAdvance = 1_024u;
-        private const uint MaxFlapSequenceAdvance = 32u;
+        private readonly InputCommand[] _slot0 =
+            new InputCommand[CapacityPerSlot];
+        private readonly InputCommand[] _slot1 =
+            new InputCommand[CapacityPerSlot];
 
-        private SlotCommandState _slot0;
-        private SlotCommandState _slot1;
+        private int _slot0Count;
+        private int _slot1Count;
+        private uint _slot0Epoch;
+        private uint _slot1Epoch;
+        private bool _slot0Ready;
+        private bool _slot1Ready;
 
-        public uint AcceptedIntents { get; private set; }
-        public uint RejectedIntents { get; private set; }
-        public uint CoalescedFlapPresses { get; private set; }
-
-        public IntentAcceptStatus TryAccept(
-            int slot,
-            in IntentMessage message)
+        public int GetCount(int slot)
         {
-            if (slot < 0 || slot > 1)
-            {
-                RejectedIntents = IncrementSaturated(RejectedIntents);
-                return IntentAcceptStatus.InvalidSlot;
-            }
-
-            if (!message.IsPayloadValid() || message.ClaimedSlot != slot)
-            {
-                RejectedIntents = IncrementSaturated(RejectedIntents);
-                return IntentAcceptStatus.InvalidPayload;
-            }
-
-            ref SlotCommandState state = ref GetState(slot);
-            if (!TryValidateIntentSequence(in state, in message))
-            {
-                RejectedIntents = IncrementSaturated(RejectedIntents);
-                return ClassifyIntentSequenceFailure(in state, in message);
-            }
-
-            uint flapDistance = unchecked(
-                message.FlapPressSequence - state.LastFlapPressSequence);
-            if (flapDistance > 0x7FFF_FFFFu
-                || flapDistance > MaxFlapSequenceAdvance)
-            {
-                RejectedIntents = IncrementSaturated(RejectedIntents);
-                return IntentAcceptStatus.InvalidFlapSequence;
-            }
-
-            if (flapDistance > 0u)
-            {
-                uint coalesced = state.PendingFlapPress
-                    ? flapDistance
-                    : flapDistance - 1u;
-                CoalescedFlapPresses = AddSaturated(
-                    CoalescedFlapPresses,
-                    coalesced);
-                state.PendingFlapPress = true;
-                state.LastFlapPressSequence = message.FlapPressSequence;
-            }
-
-            state.HasIntent = true;
-            state.Horizontal = message.Horizontal;
-            state.FlapHeld = message.FlapHeld;
-            state.LastIntentSequence = message.IntentSequence;
-            AcceptedIntents = IncrementSaturated(AcceptedIntents);
-            return IntentAcceptStatus.Accepted;
+            return slot == 0 ? _slot0Count
+                : slot == 1 ? _slot1Count
+                : 0;
         }
 
-        // Coalescing != Buffering
-
-        public FighterInput CreateInput(
-            int slot,
-            uint tick,
-            bool flapCanExecute)
+        public bool BeginEpoch(int slot, uint inputEpoch)
         {
-            if (slot < 0 || slot > 1)
+            if (slot == 0)
             {
-                return FighterInput.Neutral(tick);
+                _slot0Count = 0;
+                _slot0Epoch = inputEpoch;
+                _slot0Ready = true;
+                return true;
             }
 
-            ref SlotCommandState state = ref GetState(slot);
-            if (!state.HasIntent)
+            if (slot == 1)
             {
-                return FighterInput.Neutral(tick);
+                _slot1Count = 0;
+                _slot1Epoch = inputEpoch;
+                _slot1Ready = true;
+                return true;
             }
 
-            bool consumePending = state.PendingFlapPress && flapCanExecute;
-            bool flapRequested = state.FlapHeld || consumePending;
-            if (consumePending)
-            {
-                state.PendingFlapPress = false;
-            }
-
-            return new FighterInput(tick, state.Horizontal, flapRequested);
+            return false;
         }
 
         public void ResetSlot(int slot)
         {
             if (slot == 0)
             {
-                _slot0 = default;
+                _slot0Count = 0;
+                _slot0Epoch = 0u;
+                _slot0Ready = false;
             }
             else if (slot == 1)
             {
-                _slot1 = default;
+                _slot1Count = 0;
+                _slot1Epoch = 0u;
+                _slot1Ready = false;
             }
         }
 
-        public bool HasPendingFlapPress(int slot)
+        public InputBatchAcceptResult TryAcceptBatch(
+            int validatedSlot,
+            uint activeEpoch,
+            bool hasProcessedInput,
+            uint lastProcessedInputTick,
+            in InputBatch batch)
         {
-            if (slot == 0) return _slot0.PendingFlapPress;
-            if (slot == 1) return _slot1.PendingFlapPress;
+            if (validatedSlot < 0
+                || validatedSlot > 1
+                || batch.ClaimedSlot != validatedSlot)
+            {
+                return Result(InputBatchAcceptStatus.WrongSlot);
+            }
+
+            if (!IsReady(validatedSlot)
+                || GetEpoch(validatedSlot) != activeEpoch
+                || batch.InputEpoch != activeEpoch)
+            {
+                return Result(InputBatchAcceptStatus.WrongInputEpoch);
+            }
+
+            if (!batch.IsStructurallyValid())
+            {
+                return Result(InputBatchAcceptStatus.InvalidBatch);
+            }
+
+            if (hasProcessedInput
+                && batch.Count > 0
+                && batch.TryGet(
+                    batch.Count - 1,
+                    out InputCommand newest)
+                && SequenceMath.IsNewer(
+                    newest.InputTick,
+                    lastProcessedInputTick)
+                && !SequenceMath.TryGetForwardDistance(
+                    newest.InputTick,
+                    lastProcessedInputTick,
+                    CapacityPerSlot,
+                    out _))
+            {
+                return Result(
+                    InputBatchAcceptStatus.OutsideReceiveWindow);
+            }
+
+            byte accepted = 0;
+            byte duplicates = 0;
+            byte stale = 0;
+            for (int index = 0; index < batch.Count; index++)
+            {
+                batch.TryGet(index, out InputCommand command);
+                if (hasProcessedInput
+                    && !SequenceMath.IsNewer(
+                        command.InputTick,
+                        lastProcessedInputTick))
+                {
+                    stale++;
+                    continue;
+                }
+
+                if (Contains(validatedSlot, command.InputTick))
+                {
+                    duplicates++;
+                    continue;
+                }
+
+                if (!TryAdd(validatedSlot, in command))
+                {
+                    return new InputBatchAcceptResult(
+                        InputBatchAcceptStatus.InboxFull,
+                        accepted,
+                        duplicates,
+                        stale);
+                }
+
+                accepted++;
+            }
+
+            return new InputBatchAcceptResult(
+                accepted > 0
+                    ? InputBatchAcceptStatus.Accepted
+                    : InputBatchAcceptStatus.NoNewCommands,
+                accepted,
+                duplicates,
+                stale);
+        }
+
+        public bool TryPeekEarliest(
+            int slot,
+            uint referenceTick,
+            out InputCommand command)
+        {
+            InputCommand[] commands = GetCommands(slot);
+            int count = GetCount(slot);
+            if (commands == null || count == 0)
+            {
+                command = default;
+                return false;
+            }
+
+            bool found = false;
+            uint bestDistance = uint.MaxValue;
+            command = default;
+            for (int index = 0; index < count; index++)
+            {
+                uint tick = commands[index].InputTick;
+                uint distance = unchecked(tick - referenceTick);
+                if (distance >= 0x8000_0000u
+                    || (found && distance >= bestDistance))
+                {
+                    continue;
+                }
+
+                command = commands[index];
+                bestDistance = distance;
+                found = true;
+            }
+
+            return found;
+        }
+
+        public bool TryTakeExpected(
+            int slot,
+            uint expectedInputTick,
+            out InputCommand command)
+        {
+            InputCommand[] commands = GetCommands(slot);
+            int count = GetCount(slot);
+            if (commands == null)
+            {
+                command = default;
+                return false;
+            }
+
+            for (int index = 0; index < count; index++)
+            {
+                if (commands[index].InputTick != expectedInputTick)
+                {
+                    continue;
+                }
+
+                command = commands[index];
+                int lastIndex = count - 1;
+                commands[index] = commands[lastIndex];
+                commands[lastIndex] = default;
+                SetCount(slot, lastIndex);
+                return true;
+            }
+
+            command = default;
             return false;
         }
 
-        private static bool TryValidateIntentSequence(
-            in SlotCommandState state,
-            in IntentMessage message)
+        private bool Contains(int slot, uint inputTick)
         {
-            if (!state.HasIntent)
+            InputCommand[] commands = GetCommands(slot);
+            int count = GetCount(slot);
+            if (commands == null) return false;
+
+            for (int index = 0; index < count; index++)
             {
-                return message.IntentSequence <= MaxIntentSequenceAdvance;
+                if (commands[index].InputTick == inputTick) return true;
             }
 
-            return SequenceMath.TryGetForwardDistance(
-                message.IntentSequence,
-                state.LastIntentSequence,
-                MaxIntentSequenceAdvance,
-                out _
-            );
+            return false;
         }
 
-        private static IntentAcceptStatus ClassifyIntentSequenceFailure(
-            in SlotCommandState state,
-            in IntentMessage message)
+        private bool TryAdd(int slot, in InputCommand command)
         {
-            if (!state.HasIntent)
-            {
-                return IntentAcceptStatus.SequenceGapTooLarge;
-            }
+            InputCommand[] commands = GetCommands(slot);
+            int count = GetCount(slot);
+            if (commands == null || count >= commands.Length) return false;
 
-            uint distance = unchecked(
-                message.IntentSequence - state.LastIntentSequence);
-            return distance == 0u || distance > 0x7FFF_FFFFu
-                ? IntentAcceptStatus.StaleOrDuplicate
-                : IntentAcceptStatus.SequenceGapTooLarge;
+            commands[count] = command;
+            SetCount(slot, count + 1);
+            return true;
         }
 
-        private ref SlotCommandState GetState(int slot)
+        private InputCommand[] GetCommands(int slot)
         {
-            if (slot == 0) return ref _slot0;
-            return ref _slot1;
+            return slot == 0 ? _slot0 : slot == 1 ? _slot1 : null;
         }
 
-        private static uint IncrementSaturated(uint value)
+        private uint GetEpoch(int slot)
         {
-            return value == uint.MaxValue ? value : value + 1u;
+            return slot == 0 ? _slot0Epoch : _slot1Epoch;
         }
 
-        private static uint AddSaturated(uint value, uint increment)
+        private bool IsReady(int slot)
         {
-            return uint.MaxValue - value < increment
-                ? uint.MaxValue
-                : value + increment;
+            return slot == 0 ? _slot0Ready : _slot1Ready;
         }
 
+        private void SetCount(int slot, int count)
+        {
+            if (slot == 0) _slot0Count = count;
+            else if (slot == 1) _slot1Count = count;
+        }
+
+        private static InputBatchAcceptResult Result(
+            InputBatchAcceptStatus status)
+        {
+            return new InputBatchAcceptResult(status, 0, 0, 0);
+        }
     }
-
 }

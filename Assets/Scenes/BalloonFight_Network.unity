@@ -247,10 +247,6 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
-    - target: {fileID: 4663364682176886679, guid: 473a165dc5abf56d4841e002c7c75e40, type: 3}
-      propertyPath: _slotIndex
-      value: 1
-      objectReference: {fileID: 0}
     - target: {fileID: 6752428398508237990, guid: 473a165dc5abf56d4841e002c7c75e40, type: 3}
       propertyPath: m_LocalPosition.x
       value: 4
@@ -291,6 +287,10 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 8525116583986851003, guid: 473a165dc5abf56d4841e002c7c75e40, type: 3}
+      propertyPath: m_Color.a
+      value: 0.09803922
+      objectReference: {fileID: 0}
     - target: {fileID: 9078762733486753604, guid: 473a165dc5abf56d4841e002c7c75e40, type: 3}
       propertyPath: m_Name
       value: Fighter1
@@ -319,6 +319,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: 4663364682176886679, guid: 473a165dc5abf56d4841e002c7c75e40, type: 3}
+      propertyPath: _slotIndex
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 6752428398508237990, guid: 473a165dc5abf56d4841e002c7c75e40, type: 3}
       propertyPath: m_LocalPosition.x
       value: -4
@@ -846,12 +850,19 @@ MonoBehaviour:
   _fighter1View: {fileID: 155357502}
   _mode: 0
   _status: 0
+  _localSlotIndex: -1
   _completedServerTicks: 0
   _lastOfficialServerTick: 0
   _lastFrameTickCount: 0
   _maximumFrameTickCount: 0
   _pendingTickDebt: 0
   _rejectedOfficialSnapshots: 0
+  _interpolationStarved: 0
+  _interpolationStarvationCount: 0
+  _interpolationResetCount: 0
+  _estimatedServerTick: 0
+  _renderTick: 0
+  _secondsSinceLatestSnapshotReceived: 0
 --- !u!114 &1487936375
 MonoBehaviour:
   m_ObjectHideFlags: 0

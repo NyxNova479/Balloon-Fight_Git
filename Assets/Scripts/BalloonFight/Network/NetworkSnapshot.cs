@@ -26,6 +26,30 @@ namespace NetworkCourse.BalloonFight.Networking
             };
         }
 
+        public bool TryToSimulation(out FighterState state)
+        {
+            if (Phase > (byte)FighterPhase.Eliminated
+                || !IsFinite(PositionX)
+                || !IsFinite(PositionY)
+                || !IsFinite(VelocityX)
+                || !IsFinite(VelocityY)
+                || !IsFinite(FlapCooldownRemaining)
+                || FlapCooldownRemaining < 0f)
+            {
+                state = default;
+                return false;
+            }
+
+            state = new FighterState
+            {
+                Phase = (FighterPhase)Phase,
+                Position = new SimVector2(PositionX, PositionY),
+                Velocity = new SimVector2(VelocityX, VelocityY),
+                FlapCooldownRemaining = FlapCooldownRemaining
+            };
+            return true;
+        }
+
         public void NetworkSerialize<T>(BufferSerializer<T> serializer)
             where T : IReaderWriter
         {
@@ -35,6 +59,11 @@ namespace NetworkCourse.BalloonFight.Networking
             serializer.SerializeValue(ref VelocityX);
             serializer.SerializeValue(ref VelocityY);
             serializer.SerializeValue(ref FlapCooldownRemaining);
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 
@@ -73,12 +102,16 @@ namespace NetworkCourse.BalloonFight.Networking
         public NetworkFighterState Fighter0;
         public NetworkFighterState Fighter1;
         public NetworkMatchState Match;
+        public NetworkInputAck Slot0InputAck;
+        public NetworkInputAck Slot1InputAck;
 
         public static NetworkSnapshot Create(
             in SimulationSnapshot snapshot,
             byte occupiedSlotMask,
             ulong slot0ClientId,
-            ulong slot1ClientId)
+            ulong slot1ClientId,
+            in NetworkInputAck slot0InputAck,
+            in NetworkInputAck slot1InputAck)
         {
             FighterState fighter0 = snapshot.Fighters.Get(0);
             FighterState fighter1 = snapshot.Fighters.Get(1);
@@ -93,7 +126,9 @@ namespace NetworkCourse.BalloonFight.Networking
                 Slot1ClientId = slot1ClientId,
                 Fighter0 = NetworkFighterState.FromSimulation(in fighter0),
                 Fighter1 = NetworkFighterState.FromSimulation(in fighter1),
-                Match = NetworkMatchState.FromSimulation(in match)
+                Match = NetworkMatchState.FromSimulation(in match),
+                Slot0InputAck = slot0InputAck,
+                Slot1InputAck = slot1InputAck
             };
         }
 
@@ -117,6 +152,52 @@ namespace NetworkCourse.BalloonFight.Networking
             return false;
         }
 
+        public bool TryGetLocalInputAck(
+            ulong localClientId,
+            out NetworkInputAck ack)
+        {
+            if ((OccupiedSlotMask & SimulationState.Fighter0Bit) != 0
+                && Slot0ClientId == localClientId)
+            {
+                ack = Slot0InputAck;
+                return true;
+            }
+
+            if ((OccupiedSlotMask & SimulationState.Fighter1Bit) != 0
+                && Slot1ClientId == localClientId)
+            {
+                ack = Slot1InputAck;
+                return true;
+            }
+
+            ack = default;
+            return false;
+        }
+
+        public bool TryGetLocalPredictionBase(
+            ulong localClientId,
+            out NetworkInputAck ack,
+            out FighterState fighter)
+        {
+            if ((OccupiedSlotMask & SimulationState.Fighter0Bit) != 0
+                && Slot0ClientId == localClientId)
+            {
+                ack = Slot0InputAck;
+                return Fighter0.TryToSimulation(out fighter);
+            }
+
+            if ((OccupiedSlotMask & SimulationState.Fighter1Bit) != 0
+                && Slot1ClientId == localClientId)
+            {
+                ack = Slot1InputAck;
+                return Fighter1.TryToSimulation(out fighter);
+            }
+
+            ack = default;
+            fighter = default;
+            return false;
+        }
+
         public void NetworkSerialize<T>(BufferSerializer<T> serializer)
             where T : IReaderWriter
         {
@@ -128,6 +209,8 @@ namespace NetworkCourse.BalloonFight.Networking
             serializer.SerializeValue(ref Fighter0);
             serializer.SerializeValue(ref Fighter1);
             serializer.SerializeValue(ref Match);
+            serializer.SerializeValue(ref Slot0InputAck);
+            serializer.SerializeValue(ref Slot1InputAck);
         }
     }
 }
